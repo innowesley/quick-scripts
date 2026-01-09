@@ -163,19 +163,30 @@ elif ask "Install Visual Studio Code?"; then
 fi
 
 # -----------------------------
-# PostgreSQL 18
+# PostgreSQL (Prefer 18, fallback safe)
 # -----------------------------
 if command -v psql &>/dev/null; then
   echo -e "${GREEN}-- PostgreSQL is already installed${RESET}"
-elif ask "Install PostgreSQL 18?"; then
+elif ask "Install PostgreSQL?"; then
+  echo -e "${CYAN}-- Setting up PostgreSQL repository${RESET}"
+
   sudo install -d /usr/share/postgresql-common/pgdg
   curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
     | sudo gpg --dearmor -o /usr/share/postgresql-common/pgdg/pgdg.gpg
+
   echo "deb [arch=amd64 signed-by=/usr/share/postgresql-common/pgdg/pgdg.gpg] \
-http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
-    | sudo tee /etc/apt/sources.list.d/pgdg.list
+http://apt.postgresql.org/pub/repos/apt ${UBUNTU_CODENAME}-pgdg main" \
+    | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+
   sudo apt update -y
-  sudo apt install -y postgresql-18 postgresql-client-18
+
+  if apt-cache show postgresql-18 >/dev/null 2>&1; then
+    echo -e "${GREEN}-- Installing PostgreSQL 18${RESET}"
+    sudo apt install -y postgresql-18 postgresql-client-18
+  else
+    echo -e "${YELLOW}-- PostgreSQL 18 not available for Ubuntu ${UBUNTU_VERSION}, installing system PostgreSQL instead${RESET}"
+    sudo apt install -y postgresql postgresql-client
+  fi
 fi
 
 # -----------------------------
@@ -285,16 +296,13 @@ fi
 # -----------------------------
 # Chromium Browser
 # -----------------------------
-if command -v chromium-browser &>/dev/null || command -v chromium &>/dev/null; then
+if command -v chromium >/dev/null; then
   echo -e "${GREEN}-- Chromium is already installed${RESET}"
 elif ask "Install Chromium (open-source browser)?"; then
   echo -e "${CYAN}-- Installing Chromium${RESET}"
-  if command -v snap >/dev/null; then
-    sudo snap install chromium
-  else
-    sudo apt install -y chromium-browser || sudo apt install -y chromium
-  fi
+  sudo snap install chromium
 fi
+
 
 # -----------------------------
 # Tailscale VPN
