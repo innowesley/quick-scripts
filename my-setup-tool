@@ -84,6 +84,22 @@ sudo apt install -y "${BASE_PACKAGES[@]}"
 
 
 # -----------------------------
+# Ensure Flatpak is installed
+# -----------------------------
+if ! command -v flatpak &>/dev/null; then
+    echo -e "${CYAN}-- Installing Flatpak${RESET}"
+    sudo apt update
+    sudo apt install -y flatpak
+else
+    echo -e "${GREEN}-- Flatpak is already installed${RESET}"
+fi
+
+# Ensure Flathub remote exists
+if ! flatpak remote-list | grep -q flathub; then
+    sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+fi
+
+# -----------------------------
 # Ptyxis check / install
 # -----------------------------
 if [[ "$UBUNTU_VERSION" == 25* ]]; then
