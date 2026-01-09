@@ -1,0 +1,662 @@
+#!/usr/bin/env bash
+
+# =============================
+# Color definitions
+# =============================
+RED="\033[0;31m"
+GREEN="\033[0;32m"
+YELLOW="\033[1;33m"
+CYAN="\033[0;36m"
+RESET="\033[0m"
+
+echo -e "${CYAN}== Preparing system for installation ==${RESET}"
+
+# Do not allow root execution
+if [ "$EUID" -eq 0 ]; then
+  echo -e "${RED}Do not run this script as root.${RESET}"
+  exit 1
+fi
+
+# -----------------------------
+# Helpers
+# -----------------------------
+ask() {
+  read -rp "$(echo -e "${YELLOW}$1 [y/N]: ${RESET}")" response
+  [[ "$response" =~ ^[Yy]$ ]]
+}
+
+safe_apt_install() {
+  if ! dpkg -l | grep -q " $1 "; then
+    echo -e "${CYAN}-- Installing $1${RESET}"
+    sudo apt install -y "$1"
+  else
+    echo -e "${GREEN}-- $1 is already installed${RESET}"
+  fi
+}
+
+# -----------------------------
+# System update
+# -----------------------------
+echo -e "${CYAN}-- Updating system repositories${RESET}"
+sudo apt update -y || echo -e "${YELLOW}-- Warning: Some repos may be unreachable, continuing...${RESET}"
+sudo apt upgrade -y || echo -e "${YELLOW}-- Warning: Upgrade failed, continuing...${RESET}"
+
+# -----------------------------
+# Base packages
+# -----------------------------
+echo -e "${CYAN}-- Installing base packages${RESET}"
+sudo apt install -y \
+  curl ca-certificates gnupg lsb-release git python3 python3-venv \
+  tmux wget gpg ruby-full build-essential libcurl4-openssl-dev \
+  libxml2 libxml2-dev libxslt1-dev ruby-dev
+
+# -----------------------------
+# Ptyxis (Flatpak)
+# -----------------------------
+if flatpak list | grep -q "app.devsuite.Ptyxis" 2>/dev/null; then
+  echo -e "${GREEN}-- Ptyxis terminal is already installed (Flatpak)${RESET}"
+elif ask "Install Ptyxis terminal (Flatpak)?"; then
+  sudo apt install -y flatpak
+  sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+  sudo flatpak install -y flathub app.devsuite.Ptyxis
+fi
+
+# -----------------------------
+# Extension Manager (Flatpak)
+# -----------------------------
+if flatpak list | grep -q "com.mattjakeman.ExtensionManager" 2>/dev/null; then
+    echo -e "${GREEN}-- Extension Manager (Flatpak) is already installed${RESET}"
+elif ask "Install Extension Manager (Flatpak)?"; then
+    sudo apt install -y flatpak
+    sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+    sudo flatpak install -y flathub com.mattjakeman.ExtensionManager
+fi
+
+# -----------------------------
+# Set Ptyxis as default terminal
+# -----------------------------
+PTYXIS_WRAPPER="/usr/bin/ptyxis.wrapper"
+XTERM_SYMLINK="/usr/bin/x-terminal-emulator"
+
+if flatpak list | grep -q "app.devsuite.Ptyxis" 2>/dev/null; then
+    echo -e "${GREEN}-- Setting Ptyxis as default terminal...${RESET}"
+
+    # Create wrapper if it doesn't exist or overwrite safely
+    if [ ! -f "$PTYXIS_WRAPPER" ]; then
+        echo "#!/bin/sh" | sudo tee "$PTYXIS_WRAPPER" > /dev/null
+        echo "flatpak run app.devsuite.Ptyxis --new-window" | sudo tee -a "$PTYXIS_WRAPPER" > /dev/null
+        sudo chmod +x "$PTYXIS_WRAPPER"
+        echo -e "${GREEN}-- Ptyxis wrapper created at $PTYXIS_WRAPPER${RESET}"
+    fi
+
+    # Backup old x-terminal-emulator if it's not already pointing to Ptyxis
+    if [ -L "$XTERM_SYMLINK" ] && [ "$(readlink $XTERM_SYMLINK)" != "$PTYXIS_WRAPPER" ]; then
+        echo -e "${YELLOW}-- Backing up existing x-terminal-emulator symlink...${RESET}"
+        sudo mv "$XTERM_SYMLINK" "${XTERM_SYMLINK}.bak"
+    fi
+
+    # Create symlink if not already set
+    if [ ! -L "$XTERM_SYMLINK" ]; then
+        sudo ln -s "$PTYXIS_WRAPPER" "$XTERM_SYMLINK"
+        echo -e "${GREEN}-- Ptyxis is now the default terminal${RESET}"
+    else
+        echo -e "${GREEN}-- Ptyxis already set as default terminal${RESET}"
+    fi
+else
+    echo -e "${YELLOW}-- Ptyxis is not installed, skipping default terminal setup${RESET}"
+fi
+
+
+# -----------------------------
+# Google Chrome
+# -----------------------------
+if command -v google-chrome &>/dev/null; then
+  echo -e "${GREEN}-- Google Chrome is already installed${RESET}"
+elif ask "Install Google Chrome?"; then
+  wget -qO- https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor \
+    | sudo tee /usr/share/keyrings/google-chrome.gpg >/dev/null
+  echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
+    | sudo tee /etc/apt/sources.list.d/google-chrome.list
+  sudo apt update -y && sudo apt install -y google-chrome-stable
+fi
+
+# -----------------------------
+# Visual Studio Code (Snap)
+# -----------------------------
+if snap list 2>/dev/null | grep -q "^code "; then
+  echo -e "${GREEN}-- Visual Studio Code is already installed (Snap)${RESET}"
+elif ask "Install Visual Studio Code?"; then
+  sudo snap install code --classic
+fi
+
+# -----------------------------
+# PostgreSQL 18
+# -----------------------------
+if command -v psql &>/dev/null; then
+  echo -e "${GREEN}-- PostgreSQL is already installed${RESET}"
+elif ask "Install PostgreSQL 18?"; then
+  sudo install -d /usr/share/postgresql-common/pgdg
+  curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+    | sudo gpg --dearmor -o /usr/share/postgresql-common/pgdg/pgdg.gpg
+  echo "deb [arch=amd64 signed-by=/usr/share/postgresql-common/pgdg/pgdg.gpg] \
+http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+    | sudo tee /etc/apt/sources.list.d/pgdg.list
+  sudo apt update -y
+  sudo apt install -y postgresql-18 postgresql-client-18
+fi
+
+# -----------------------------
+# Docker
+# -----------------------------
+# Docker Installation
+# -----------------------------
+install_docker_cli() {
+  if command -v docker &>/dev/null && [ "$docker_type" != "Desktop" ]; then
+    echo -e "${GREEN}-- Docker CLI is already installed${RESET}"
+  else
+    echo -e "${CYAN}-- Installing Docker CLI${RESET}"
+    # Add Docker's official GPG key
+    sudo apt-get update -y
+    sudo apt-get install -y ca-certificates curl
+    sudo install -m 0755 -d /etc/apt/keyrings
+    sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+    sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+    # Add the repository to Apt sources
+    echo \
+      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+      $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+      sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+    sudo apt-get update -y
+
+    # Install Docker packages
+    sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+    # Add current user to docker group
+    echo -e "${CYAN}-- Adding current user to docker group${RESET}"
+    sudo usermod -aG docker "$USER"
+    echo -e "${YELLOW}-- You may need to log out and back in to use Docker without sudo${RESET}"
+  fi
+}
+
+install_docker_desktop() {
+  if command -v docker &>/dev/null && dpkg -l 2>/dev/null | grep -q docker-desktop; then
+    echo -e "${GREEN}-- Docker Desktop is already installed (includes CLI)${RESET}"
+  else
+    echo -e "${CYAN}-- Installing Docker Desktop${RESET}"
+    case $(uname -m) in
+      x86_64)
+        sudo apt install -y gnome-terminal
+        # Add Docker's official GPG key
+        sudo apt-get update -y
+        sudo apt-get install -y ca-certificates curl
+        sudo install -m 0755 -d /etc/apt/keyrings
+        sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+        sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+        # Add the repository to Apt sources
+        echo \
+          "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+          $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+          sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+        sudo apt-get update -y
+
+        wget -O /tmp/docker-desktop-amd64.deb https://desktop.docker.com/linux/main/amd64/docker-desktop-amd64.deb
+        sudo apt install -y /tmp/docker-desktop-amd64.deb
+        # Add current user to docker group
+        echo -e "${CYAN}-- Adding current user to docker group${RESET}"
+        sudo usermod -aG docker "$USER"
+        echo -e "${YELLOW}-- You may need to log out and back in to use Docker without sudo${RESET}"
+        echo -e "${YELLOW}-- Launch Docker Desktop once to accept license.${RESET}"
+        echo -e "${GREEN}-- Docker Desktop installed (includes CLI)${RESET}"
+        ;;
+      aarch64)
+        echo -e "${RED}-- Docker Desktop ARM64 installation not yet supported${RESET}"
+        ;;
+      *)
+        echo -e "${RED}-- Unsupported architecture for Docker Desktop${RESET}"
+        ;;
+    esac
+  fi
+}
+
+if ask "Install Docker?"; then
+  echo -e "${CYAN}-- Choose Docker variant:${RESET}"
+  echo "1. Docker CLI only (command-line interface)"
+  echo "2. Docker Desktop (includes GUI and CLI)"
+  docker_type=""
+
+  while true; do
+    read -rp "$(echo -e "${YELLOW}Choose Docker variant [1/2]: ${RESET}")" docker_variant
+    case $docker_variant in
+      1) install_docker_cli; docker_type="CLI"; break;;
+      2) install_docker_desktop; docker_type="Desktop"; break;;
+      *) echo -e "${RED}Invalid choice. Please enter 1 or 2.${RESET}";;
+    esac
+  done
+else
+  echo -e "${YELLOW}-- Skipping Docker installation${RESET}"
+fi
+
+# -----------------------------
+# Node.js 25
+# -----------------------------
+if command -v node &>/dev/null; then
+  echo -e "${GREEN}-- Node.js is already installed ($(node -v))${RESET}"
+elif ask "Install Node.js 25 (npm included)?"; then
+  echo -e "${CYAN}-- Installing Node.js 25${RESET}"
+  curl -fsSL https://deb.nodesource.com/setup_25.x | sudo -E bash -
+  sudo apt install -y nodejs
+fi
+
+# -----------------------------
+# Chromium Browser
+# -----------------------------
+if command -v chromium-browser &>/dev/null || command -v chromium &>/dev/null; then
+  echo -e "${GREEN}-- Chromium is already installed${RESET}"
+elif ask "Install Chromium (open-source browser)?"; then
+  echo -e "${CYAN}-- Installing Chromium${RESET}"
+  if command -v snap >/dev/null; then
+    sudo snap install chromium
+  else
+    sudo apt install -y chromium-browser || sudo apt install -y chromium
+  fi
+fi
+
+# -----------------------------
+# Tailscale VPN
+# -----------------------------
+if command -v tailscale &>/dev/null; then
+  echo -e "${GREEN}-- Tailscale is already installed${RESET}"
+elif ask "Install and enable Tailscale VPN?"; then
+  echo -e "${CYAN}-- Installing Tailscale${RESET}"
+  curl -fsSL https://tailscale.com/install.sh | sh
+  sudo tailscale up
+fi
+
+# -----------------------------
+# OpenCode
+# -----------------------------
+if command -v opencode &>/dev/null; then
+  echo -e "${GREEN}-- OpenCode is already installed${RESET}"
+elif ask "Install OpenCode?"; then
+  echo -e "${CYAN}-- Installing OpenCode${RESET}"
+  curl -fsSL https://opencode.ai/install | bash
+fi
+
+# -----------------------------
+# Recon tools
+# -----------------------------
+if ask "Install recon tools (nmap, amass, theHarvester, dnsutils)?"; then
+  sudo apt install -y nmap dnsutils whois masscan
+  command -v amass >/dev/null || sudo snap install amass
+
+  if ! command -v theHarvester >/dev/null; then
+    sudo apt install -y pipx
+    pipx ensurepath
+    pipx install theHarvester
+  fi
+fi
+
+# -----------------------------
+# Web testing tools
+# -----------------------------
+if ask "Install web testing tools (nikto, sqlmap, gobuster, wpscan, feroxbuster)?"; then
+  sudo apt install -y nikto sqlmap gobuster dirb
+  command -v wpscan >/dev/null || sudo gem install wpscan
+  command -v feroxbuster >/dev/null || sudo snap install feroxbuster
+fi
+
+# -----------------------------
+# Credential tools
+# -----------------------------
+if ask "Install credential tools (hydra, crunch)?"; then
+  sudo apt install -y hydra crunch
+fi
+
+# -----------------------------
+# dirsearch
+# -----------------------------
+if ask "Install dirsearch?"; then
+  [ -d /opt/dirsearch ] || sudo git clone https://github.com/maurosoria/dirsearch.git /opt/dirsearch
+  sudo ln -sf /opt/dirsearch/dirsearch.py /usr/local/bin/dirsearch
+  sudo chmod +x /opt/dirsearch/dirsearch.py
+fi
+
+# -----------------------------
+# Productivity Tools
+# -----------------------------
+if ask "Install productivity tools (fzf, ripgrep, bat, htop, jq)?"; then
+  echo -e "${CYAN}-- Installing productivity tools${RESET}"
+  sudo apt install -y fzf ripgrep bat htop jq
+fi
+
+# -----------------------------
+# Networking Tools
+# -----------------------------
+if ask "Install advanced networking tools (net-tools, traceroute, mtr, httpie, tcpdump)?"; then
+  echo -e "${CYAN}-- Installing networking tools${RESET}"
+  sudo apt install -y net-tools traceroute mtr httpie tcpdump
+fi
+
+# -----------------------------
+# Additional Security Tools
+# -----------------------------
+if ask "Install additional security tools (whatweb, masscan)?"; then
+  echo -e "${CYAN}-- Installing additional security tools${RESET}"
+  sudo apt install -y whatweb masscan
+fi
+
+# =============================
+# INSTALL SUMMARY
+# =============================
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# ---------- Colors ----------
+GREEN="\e[32m"
+RED="\e[31m"
+YELLOW="\e[33m"
+BLUE="\e[34m"
+RESET="\e[0m"
+
+# ---------- Helpers ----------
+installed() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+apt_version() {
+  dpkg-query -W -f='${Version}' "$1" 2>/dev/null || echo "-"
+}
+
+snap_version() {
+  snap list "$1" 2>/dev/null | awk 'NR==2 {print $2}'
+}
+
+flatpak_version() {
+  flatpak info "$1" 2>/dev/null | awk -F': ' '/Version:/ {print $2}'
+}
+
+git_version_clean() {
+  git --version 2>/dev/null | awk '{print $3}'
+}
+
+python_version_clean() {
+  python3 --version 2>/dev/null | awk '{print $2}'
+}
+
+tmux_version_clean() {
+  tmux -V 2>/dev/null | awk '{print $2}'
+}
+
+docker_info() {
+  local version=$(docker --version 2>/dev/null | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || echo "-")
+  local type="CLI"
+  if dpkg -l 2>/dev/null | grep -q docker-desktop; then
+    type="Desktop"
+  elif [ "${docker_type:-}" = "Desktop" ]; then
+    type="Desktop"
+  fi
+  echo "$version:$type"
+}
+
+hydra_version_clean() {
+  apt_version hydra 2>/dev/null || hydra -v 2>&1 | grep -Eo 'v[0-9]+\.[0-9]+' | sed 's/v//' || echo "-"
+}
+
+wpscan_version_clean() {
+  wpscan --version 2>/dev/null | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n1
+}
+
+dirsearch_version_clean() {
+  dirsearch --version 2>/dev/null | awk '{print $2}'
+}
+
+node_version_clean() {
+  node --version 2>/dev/null | sed 's/v//' || echo "-"
+}
+
+npm_version_clean() {
+  npm --version 2>/dev/null || echo "-"
+}
+
+chromium_version_clean() {
+  if command -v chromium-browser >/dev/null; then
+    chromium-browser --version 2>/dev/null | awk '{print $2}' || echo "-"
+  elif command -v chromium >/dev/null; then
+    chromium --version 2>/dev/null | awk '{print $2}' || echo "-"
+  else
+    echo "-"
+  fi
+}
+
+tailscale_version_clean() {
+  tailscale version 2>/dev/null | grep -o 'version: [0-9]\+\.[0-9]\+\.[0-9]\+' | cut -d' ' -f2 || echo "-"
+}
+
+fzf_version_clean() {
+  fzf --version 2>/dev/null | head -n1 || echo "-"
+}
+
+ripgrep_version_clean() {
+  rg --version 2>/dev/null | head -n1 || echo "-"
+}
+
+bat_version_clean() {
+  batcat --version 2>/dev/null | head -n1 || bat --version 2>/dev/null | head -n1 || echo "-"
+}
+
+htop_version_clean() {
+  htop --version 2>/dev/null | head -n1 || echo "-"
+}
+
+jq_version_clean() {
+  jq --version 2>/dev/null | cut -d'-' -f2 || echo "-"
+}
+
+nettools_version_clean() {
+  ifconfig --version 2>/dev/null | head -n1 | awk '{print $2}' || echo "-"
+}
+
+traceroute_version_clean() {
+  traceroute --version 2>&1 | awk -F'version ' '{print $2}' | awk '{print $1}' | tr -d ',' || echo "-"
+}
+
+mtr_version_clean() {
+  mtr --version 2>/dev/null | head -n1 | awk '{print $2}' || echo "-"
+}
+
+httpie_version_clean() {
+  http --version 2>/dev/null || echo "-"
+}
+
+tcpdump_version_clean() {
+  tcpdump --version 2>/dev/null | head -n1 | awk '{print $2}' || echo "-"
+}
+
+whatweb_version_clean() {
+  whatweb --version 2>/dev/null | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -n1 || echo "-"
+}
+
+nmap_version_clean() {
+  nmap --version 2>/dev/null | grep -o 'version [0-9]\+\.[0-9]\+' | cut -d' ' -f2 || echo "-"
+}
+
+masscan_version_clean() {
+  masscan --version 2>/dev/null | grep -o 'version [0-9]\+\.[0-9]\+\.[0-9]\+' | cut -d' ' -f2 || echo "-"
+}
+
+print_row() {
+  local name="$1" status="$2" version="$3" source="$4"
+  if [ "$status" = "Missing" ]; then
+    printf "%-22s ${YELLOW}%-11s${RESET} %-22s %-10s\n" "$name" "$status" "$version" "$source"
+  else
+    printf "%-22s ${GREEN}%-11s${RESET} %-22s %-10s\n" "$name" "$status" "$version" "$source"
+  fi
+}
+
+header() {
+  echo -e "\n${BLUE}-- $1 --${RESET}"
+}
+
+# ---------- Summary ----------
+echo -e "\n==================== INSTALL SUMMARY ===================="
+printf "%-22s %-11s %-22s %-10s\n" "NAME" "STATUS" "VERSION" "SOURCE"
+echo "--------------------------------------------------------"
+
+# ---------- Applications ----------
+header "Applications"
+
+installed code \
+  && print_row "VS Code" "Installed" "$(snap_version code)" "Snap" \
+  || print_row "VS Code" "Missing" "-" "-"
+
+installed google-chrome \
+  && print_row "Google Chrome" "Installed" "$(google-chrome --version | awk '{print $3}')" "APT" \
+  || print_row "Google Chrome" "Missing" "-" "-"
+
+flatpak list | grep -q "app.devsuite.Ptyxis" \
+  && print_row "Ptyxis" "Installed" "$(flatpak_version app.devsuite.Ptyxis)" "Flatpak" \
+  || print_row "Ptyxis" "Missing" "-" "-"
+
+installed docker \
+  && docker_info=$(docker_info) && docker_version=$(echo "$docker_info" | cut -d: -f1) && docker_type=$(echo "$docker_info" | cut -d: -f2) && print_row "Docker ($docker_type)" "Installed" "$docker_version" "APT" \
+  || print_row "Docker" "Missing" "-" "-"
+
+installed psql \
+  && print_row "PostgreSQL" "Installed" "$(psql --version | awk '{print $3}')" "APT" \
+  || print_row "PostgreSQL" "Missing" "-" "-"
+
+installed node \
+  && print_row "Node.js" "Installed" "$(node_version_clean)" "APT" \
+  || print_row "Node.js" "Missing" "-" "-"
+
+installed npm \
+  && print_row "npm" "Installed" "$(npm_version_clean)" "APT" \
+  || print_row "npm" "Missing" "-" "-"
+
+installed chromium-browser || installed chromium \
+  && print_row "Chromium" "Installed" "$(chromium_version_clean)" "APT/Snap" \
+  || print_row "Chromium" "Missing" "-" "-"
+
+installed tailscale \
+  && print_row "Tailscale" "Installed" "$(tailscale_version_clean)" "APT" \
+  || print_row "Tailscale" "Missing" "-" "-"
+
+# ---------- Productivity Tools ----------
+header "Productivity Tools"
+
+installed fzf \
+  && print_row "fzf" "Installed" "$(fzf_version_clean)" "APT" \
+  || print_row "fzf" "Missing" "-" "-"
+
+installed rg \
+  && print_row "ripgrep" "Installed" "$(ripgrep_version_clean)" "APT" \
+  || print_row "ripgrep" "Missing" "-" "-"
+
+installed batcat || installed bat \
+  && print_row "bat" "Installed" "$(bat_version_clean)" "APT" \
+  || print_row "bat" "Missing" "-" "-"
+
+installed htop \
+  && print_row "htop" "Installed" "$(htop_version_clean)" "APT" \
+  || print_row "htop" "Missing" "-" "-"
+
+installed jq \
+  && print_row "jq" "Installed" "$(jq_version_clean)" "APT" \
+  || print_row "jq" "Missing" "-" "-"
+
+# ---------- Advanced Networking ----------
+header "Advanced Networking"
+
+installed ifconfig \
+  && print_row "net-tools" "Installed" "$(nettools_version_clean)" "APT" \
+  || print_row "net-tools" "Missing" "-" "-"
+
+installed traceroute \
+  && print_row "traceroute" "Installed" "$(traceroute_version_clean)" "APT" \
+  || print_row "traceroute" "Missing" "-" "-"
+
+installed mtr \
+  && print_row "mtr" "Installed" "$(mtr_version_clean)" "APT" \
+  || print_row "mtr" "Missing" "-" "-"
+
+installed http \
+  && print_row "httpie" "Installed" "$(httpie_version_clean)" "APT" \
+  || print_row "httpie" "Missing" "-" "-"
+
+installed tcpdump \
+  && print_row "tcpdump" "Installed" "$(tcpdump_version_clean)" "APT" \
+  || print_row "tcpdump" "Missing" "-" "-"
+
+# ---------- Penetration Tools ----------
+header "Penetration Tools"
+
+installed nmap \
+  && print_row "nmap" "Installed" "$(nmap_version_clean)" "APT" \
+  || print_row "nmap" "Missing" "-" "-"
+
+installed amass \
+  && print_row "amass" "Installed" "$(snap_version amass)" "Snap" \
+  || print_row "amass" "Missing" "-" "-"
+
+installed nikto \
+  && print_row "nikto" "Installed" "$(apt_version nikto)" "APT" \
+  || print_row "nikto" "Missing" "-" "-"
+
+installed sqlmap \
+  && print_row "sqlmap" "Installed" "$(apt_version sqlmap)" "APT" \
+  || print_row "sqlmap" "Missing" "-" "-"
+
+installed gobuster \
+  && print_row "gobuster" "Installed" "$(apt_version gobuster)" "APT" \
+  || print_row "gobuster" "Missing" "-" "-"
+
+installed feroxbuster \
+  && print_row "feroxbuster" "Installed" "$(snap_version feroxbuster)" "Snap" \
+  || print_row "feroxbuster" "Missing" "-" "-"
+
+# ---------- Exploitation / Credential Tools ----------
+header "Exploitation / Credential Tools"
+
+installed hydra \
+  && print_row "hydra" "Installed" "$(hydra_version_clean)" "APT" \
+  || print_row "hydra" "Missing" "-" "-"
+
+installed crunch \
+  && print_row "crunch" "Installed" "$(apt_version crunch)" "APT" \
+  || print_row "crunch" "Missing" "-" "-"
+
+installed wpscan \
+  && print_row "wpscan" "Installed" "$(wpscan_version_clean)" "Gem" \
+  || print_row "wpscan" "Missing" "-" "-"
+
+installed dirsearch \
+  && print_row "dirsearch" "Installed" "$(dirsearch_version_clean)" "Git" \
+  || print_row "dirsearch" "Missing" "-" "-"
+
+installed whatweb \
+  && print_row "whatweb" "Installed" "$(whatweb_version_clean)" "APT" \
+  || print_row "whatweb" "Missing" "-" "-"
+
+installed masscan \
+  && print_row "masscan" "Installed" "$(masscan_version_clean)" "APT" \
+  || print_row "masscan" "Missing" "-" "-"
+
+# ---------- Utilities & Networking ----------
+header "Utilities & Networking"
+
+installed git \
+  && print_row "git" "Installed" "$(git_version_clean)" "APT" \
+  || print_row "git" "Missing" "-" "-"
+
+installed python3 \
+  && print_row "python3" "Installed" "$(python_version_clean)" "APT" \
+  || print_row "python3" "Missing" "-" "-"
+
+installed tmux \
+  && print_row "tmux" "Installed" "$(tmux_version_clean)" "APT" \
+  || print_row "tmux" "Missing" "-" "-"
+
+echo "========================================================="
