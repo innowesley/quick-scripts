@@ -11,6 +11,15 @@ RESET="\033[0m"
 
 echo -e "${CYAN}== Preparing system for installation ==${RESET}"
 
+# -----------------------------
+# Ubuntu version detection
+# -----------------------------
+UBUNTU_VERSION="$(lsb_release -rs)"
+UBUNTU_CODENAME="$(lsb_release -cs)"
+
+echo -e "${CYAN}-- Detected Ubuntu $UBUNTU_VERSION ($UBUNTU_CODENAME)${RESET}"
+
+
 # Do not allow root execution
 if [ "$EUID" -eq 0 ]; then
   echo -e "${RED}Do not run this script as root.${RESET}"
@@ -45,10 +54,34 @@ sudo apt upgrade -y || echo -e "${YELLOW}-- Warning: Upgrade failed, continuing.
 # Base packages
 # -----------------------------
 echo -e "${CYAN}-- Installing base packages${RESET}"
-sudo apt install -y \
-  curl ca-certificates gnupg lsb-release git python3 python3-venv \
-  tmux wget gpg ruby-full build-essential libcurl4-openssl-dev \
-  libxml2 libxml2-dev libxslt1-dev ruby-dev
+
+BASE_PACKAGES=(
+  curl
+  ca-certificates
+  gnupg
+  lsb-release
+  git
+  python3
+  python3-venv
+  tmux
+  wget
+  gpg
+  ruby-full
+  build-essential
+  libcurl4-openssl-dev
+  libxslt1-dev
+  ruby-dev
+)
+
+# libxml2 runtime changed in Ubuntu 25
+if [[ "$UBUNTU_VERSION" == 22.* ]]; then
+  BASE_PACKAGES+=(libxml2 libxml2-dev)
+else
+  BASE_PACKAGES+=(libxml2-dev)
+fi
+
+sudo apt install -y "${BASE_PACKAGES[@]}"
+
 
 # -----------------------------
 # Ptyxis (Flatpak)
