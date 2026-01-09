@@ -84,15 +84,28 @@ sudo apt install -y "${BASE_PACKAGES[@]}"
 
 
 # -----------------------------
-# Ptyxis (Flatpak)
+# Ptyxis check / install
 # -----------------------------
-if flatpak list | grep -q "app.devsuite.Ptyxis" 2>/dev/null; then
-  echo -e "${GREEN}-- Ptyxis terminal is already installed (Flatpak)${RESET}"
-elif ask "Install Ptyxis terminal (Flatpak)?"; then
-  sudo apt install -y flatpak
-  sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-  sudo flatpak install -y flathub app.devsuite.Ptyxis
+if [[ "$UBUNTU_VERSION" == 25* ]]; then
+    # Ubuntu 25: Ptyxis exists
+    if command -v ptyxis &>/dev/null; then
+        echo -e "${GREEN}-- Ptyxis terminal is installed${RESET}"
+        PTYXIS_VERSION=$(ptyxis --version | head -n1 | awk '{print $2}')
+        echo -e "${CYAN}-- Ptyxis version: ${PTYXIS_VERSION}${RESET}"
+    else
+        echo -e "${RED}-- Ptyxis not found on Ubuntu 25 (unexpected)${RESET}"
+    fi
+else
+    # Older Ubuntu: use Flatpak
+    if flatpak list | grep -q "app.devsuite.Ptyxis" 2>/dev/null; then
+        echo -e "${GREEN}-- Ptyxis terminal is already installed (Flatpak)${RESET}"
+    elif ask "Install Ptyxis terminal (Flatpak)?"; then
+        sudo apt install -y flatpak
+        sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+        sudo flatpak install -y flathub app.devsuite.Ptyxis
+    fi
 fi
+
 
 # -----------------------------
 # Extension Manager (Flatpak)
